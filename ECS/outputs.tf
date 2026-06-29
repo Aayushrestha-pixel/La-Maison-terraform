@@ -1,15 +1,19 @@
-output "backend_ecr_url" {
-  value = aws_ecr_repository.backend.repository_url
+########################################
+# Outputs
+########################################
+
+output "ecr_repository_url" {
+  value = aws_ecr_repository.app.repository_url
 }
 
-output "client_ecr_url" {
-  value = aws_ecr_repository.client.repository_url
+output "ecs_service_name" {
+  value = aws_ecs_service.app.name
 }
 
-output "cluster_name" {
-  value = aws_ecs_cluster.main.name
+output "task_definition_arn" {
+  value = aws_ecs_task_definition.app.arn
 }
 
-output "alb_dns_name" {
-  value = aws_lb.main.dns_name
+output "application_url" {
+  value = "http://${data.aws_lb.platform.dns_name}${var.path_pattern}"
 }

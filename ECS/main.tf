@@ -1,236 +1,269 @@
-# ECR
-resource "aws_ecr_repository" "backend" {
-  name                 = "la-maison-backend"
-  image_tag_mutability = "MUTABLE"
+########################################
+# Shared Platform Resources
+########################################
+
+data "aws_ecs_cluster" "platform" {
+  cluster_name = var.cluster_name
 }
 
-resource "aws_ecr_repository" "client" {
-  name                 = "la-maison-client"
-  image_tag_mutability = "MUTABLE"
+data "aws_lb" "platform" {
+  name = var.alb_name
 }
 
-# ALB
-resource "aws_security_group" "alb" {
-  name   = "la-maison-alb-sg"
-  vpc_id = data.aws_vpc.default.id
-
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
-resource "aws_security_group" "backend" {
-  name   = "la-maison-backend-sg"
-  vpc_id = data.aws_vpc.default.id
-
-  ingress {
-    from_port       = 8000
-    to_port         = 8000
-    protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
-resource "aws_security_group" "client" {
-  name   = "la-maison-client-sg"
-  vpc_id = data.aws_vpc.default.id
-
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
-resource "aws_lb" "main" {
-  name            = "la-maison-alb"
-  internal        = false
-  security_groups = [aws_security_group.alb.id]
-  subnets         = data.aws_subnets.default.ids
-}
-
-resource "aws_lb_target_group" "backend" {
-  name        = "la-maison-backend-tg"
-  port        = 8000
-  protocol    = "HTTP"
-  target_type = "ip"
-  vpc_id      = data.aws_vpc.default.id
-
-  health_check {
-    path = "/health"
-  }
-}
-
-resource "aws_lb_target_group" "client" {
-  name        = "la-maison-client-tg"
-  port        = 80
-  protocol    = "HTTP"
-  target_type = "ip"
-  vpc_id      = data.aws_vpc.default.id
-
-  health_check {
-    path = "/"
-  }
-}
-
-resource "aws_lb_listener" "main" {
-  load_balancer_arn = aws_lb.main.arn
+data "aws_lb_listener" "http" {
+  load_balancer_arn = data.aws_lb.platform.arn
   port              = 80
-  protocol          = "HTTP"
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.client.arn
-  }
 }
 
-resource "aws_lb_listener_rule" "api" {
-  listener_arn = aws_lb_listener.main.arn
-  priority     = 100
+########################################
+# Shared IAM Role
+########################################
+
+data "aws_iam_role" "ecs_execution_role" {
+  name = "concproject-ecs-execution-role"
+}
+
+########################################
+# Shared Networking
+########################################
+
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnets" "default" {
+
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+
+}
+
+########################################
+# Shared ECS Security Group
+########################################
+
+data "aws_security_group" "ecs_sg" {
+  name = "concproject-ecs-sg"
+}
+
+########################################
+# ECR Repository
+########################################
+
+resource "aws_ecr_repository" "app" {
+
+  name = var.app_name
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = {
+    Project = "CONC"
+    Owner   = var.app_name
+  }
+
+}
+
+########################################
+# CloudWatch Log Group
+########################################
+
+resource "aws_cloudwatch_log_group" "app" {
+
+  name              = "/ecs/${var.app_name}"
+  retention_in_days = 7
+
+  tags = {
+    Project = "CONC"
+    Owner   = var.app_name
+  }
+
+}
+
+########################################
+# Target Group
+########################################
+
+resource "aws_lb_target_group" "app" {
+
+  name = "${var.app_name}-tg"
+
+  port = var.container_port
+
+  protocol = "HTTP"
+
+  target_type = "ip"
+
+  vpc_id = data.aws_vpc.default.id
+
+  health_check {
+
+    enabled = true
+
+    path = "/"
+
+    protocol = "HTTP"
+
+    port = "traffic-port"
+
+    matcher = "200"
+
+    healthy_threshold = 2
+
+    unhealthy_threshold = 2
+
+    interval = 30
+
+    timeout = 5
+
+  }
+
+  tags = {
+    Project = "CONC"
+    Owner   = var.app_name
+  }
+
+}
+
+########################################
+# ECS Task Definition
+########################################
+
+resource "aws_ecs_task_definition" "app" {
+
+  family = var.app_name
+
+  requires_compatibilities = ["FARGATE"]
+
+  network_mode = "awsvpc"
+
+  cpu    = var.task_cpu
+  memory = var.task_memory
+
+  execution_role_arn = data.aws_iam_role.ecs_execution_role.arn
+
+  container_definitions = jsonencode([
+    {
+
+      name  = var.app_name
+
+      image = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
+
+      essential = true
+
+      portMappings = [
+        {
+          containerPort = var.container_port
+          hostPort      = var.container_port
+          protocol      = "tcp"
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.app.name
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "ecs"
+        }
+      }
+
+    }
+  ])
+
+  tags = {
+    Project = "CONC"
+    Owner   = var.app_name
+  }
+
+}
+
+########################################
+# ECS Service
+########################################
+
+resource "aws_ecs_service" "app" {
+
+  name = "${var.app_name}-service"
+
+  cluster = data.aws_ecs_cluster.platform.id
+
+  task_definition = aws_ecs_task_definition.app.arn
+
+  desired_count = 1
+
+  launch_type = "FARGATE"
+
+  network_configuration {
+
+    subnets = data.aws_subnets.default.ids
+
+    security_groups = [
+      data.aws_security_group.ecs_sg.id
+    ]
+
+    assign_public_ip = true
+
+  }
+
+  load_balancer {
+
+    target_group_arn = aws_lb_target_group.app.arn
+
+    container_name = var.app_name
+
+    container_port = var.container_port
+
+  }
+
+  depends_on = [
+    aws_lb_target_group.app
+  ]
+
+  tags = {
+    Project = "CONC"
+    Owner   = var.app_name
+  }
+
+}
+
+########################################
+# ALB Listener Rule
+########################################
+
+resource "aws_lb_listener_rule" "app" {
+
+  listener_arn = data.aws_lb_listener.http.arn
+
+  priority = var.listener_priority
 
   action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.backend.arn
+
+    type = "forward"
+
+    target_group_arn = aws_lb_target_group.app.arn
+
   }
 
   condition {
+
     path_pattern {
-      values = ["/api*"]
+
+      values = [
+        var.path_pattern
+      ]
+
     }
-  }
-}
 
-# IAM - required for ECS to pull images from ECR
-resource "aws_iam_role" "ecs_exec" {
-  name = "la-maison-ecs-exec-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Action    = "sts:AssumeRole"
-      Effect    = "Allow"
-      Principal = { Service = "ecs-tasks.amazonaws.com" }
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "ecs_exec" {
-  role       = aws_iam_role.ecs_exec.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
-# ECS
-resource "aws_ecs_cluster" "main" {
-  name = "la-maison-cluster"
-}
-
-resource "aws_ecs_task_definition" "backend" {
-  family                   = "la-maison-backend"
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
-  cpu                      = var.task_cpu
-  memory                   = var.task_memory
-  execution_role_arn       = aws_iam_role.ecs_exec.arn
-
-  container_definitions = jsonencode([{
-    name      = "backend"
-    image     = "${aws_ecr_repository.backend.repository_url}:latest"
-    essential = true
-    portMappings = [{
-      containerPort = 8000
-      protocol      = "tcp"
-    }]
-    environment = [{
-      name  = "ALLOWED_ORIGIN"
-      value = "http://${aws_lb.main.dns_name}"
-    }]
-  }])
-}
-
-resource "aws_ecs_task_definition" "client" {
-  family                   = "la-maison-client"
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
-  cpu                      = var.task_cpu
-  memory                   = var.task_memory
-  execution_role_arn       = aws_iam_role.ecs_exec.arn
-
-  container_definitions = jsonencode([{
-    name      = "client"
-    image     = "${aws_ecr_repository.client.repository_url}:latest"
-    essential = true
-    portMappings = [{
-      containerPort = 80
-      protocol      = "tcp"
-    }]
-  }])
-}
-
-resource "aws_ecs_service" "backend" {
-  name            = "la-maison-backend"
-  cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.backend.arn
-  desired_count   = var.desired_count
-  launch_type     = "FARGATE"
-
-  network_configuration {
-    subnets          = data.aws_subnets.default.ids
-    security_groups  = [aws_security_group.backend.id]
-    assign_public_ip = true
   }
 
-  load_balancer {
-    target_group_arn = aws_lb_target_group.backend.arn
-    container_name   = "backend"
-    container_port   = 8000
+  tags = {
+    Project = "CONC"
+    Owner   = var.app_name
   }
 
-  depends_on = [aws_lb_listener_rule.api, aws_iam_role_policy_attachment.ecs_exec]
-}
-
-resource "aws_ecs_service" "client" {
-  name            = "la-maison-client"
-  cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.client.arn
-  desired_count   = var.desired_count
-  launch_type     = "FARGATE"
-
-  network_configuration {
-    subnets          = data.aws_subnets.default.ids
-    security_groups  = [aws_security_group.client.id]
-    assign_public_ip = true
-  }
-
-  load_balancer {
-    target_group_arn = aws_lb_target_group.client.arn
-    container_name   = "client"
-    container_port   = 80
-  }
-
-  depends_on = [aws_lb_listener.main, aws_iam_role_policy_attachment.ecs_exec]
 }

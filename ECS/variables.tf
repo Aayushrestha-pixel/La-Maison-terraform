@@ -1,6 +1,24 @@
-variable "aws_region" {
+variable "region" {
   type    = string
   default = "ap-south-1"
+}
+
+variable "cluster_name" {
+  type    = string
+  default = "aayush-cluster"
+}
+
+variable "alb_name" {
+  type    = string
+  default = "aayush-alb"
+}
+
+variable "app_name" {
+  type = string
+}
+
+variable "container_port" {
+  type = number
 }
 
 variable "task_cpu" {
@@ -13,7 +31,15 @@ variable "task_memory" {
   default = "512"
 }
 
-variable "desired_count" {
-  type    = number
-  default = 1
+variable "image_tag" {
+  type    = string
+  default = "latest"
+}
+
+variable "listener_priority" {
+  type = number
+}
+
+variable "path_pattern" {
+  type = string
 }
