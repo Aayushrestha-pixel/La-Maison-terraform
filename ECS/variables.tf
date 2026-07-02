@@ -5,12 +5,12 @@ variable "region" {
 
 variable "cluster_name" {
   type    = string
-  default = "aayush-cluster"
+  default = "concproject-cluster"
 }
 
 variable "alb_name" {
   type    = string
-  default = "aayush-alb"
+  default = "concproject-alb"
 }
 
 variable "app_name" {
